@@ -85,13 +85,18 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: busybox
-          path: repo/
+          path: temp-repo/
+
+      - name: Move RPMs to Versioned Subdirectory
+        run: |
+          mkdir -p publish/7.2/x86_64
+          cp -r temp-repo/* publish/7.2/x86_64/
 
       - name: Upload to GitHub Pages
-        id: deployment
         uses: actions/upload-pages-artifact@v3
         with:
-          path: repo/
+          path: publish/
+
 
       - name: Deploy to GitHub Pages
         uses: actions/deploy-pages@v4
