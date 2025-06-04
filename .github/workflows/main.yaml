@@ -24,7 +24,7 @@ jobs:
         run: |
           dnf clean all && dnf makecache
           dnf install -y rpm-build rpmdevtools createrepo_c
-          dnf install -y libv4l-devel
+          dnf install -y libv4l-devel pam-devel
           dnf install -y 'dnf-command(builddep)'
 
       - name: Set up RPM build environment
