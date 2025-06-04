@@ -2,19 +2,21 @@ name: Build & Deploy Busybox RPMs
 
 on:
   push:
-    branches:
-      - 7.2-beta
-    tags:
-      - "*"
-  pull_request:
-    branches:
-      - 7.2-beta
-  workflow_dispatch:  # Allows manual trigger
+    branches: [main]
+  workflow_dispatch:
 
 jobs:
   build-rpm:
     runs-on: ubuntu-latest
-    container: fedora:42
+    strategy:
+      matrix:
+        build:
+          - version: "7.2"
+            fedora: "42"
+          - version: "7.0"
+            fedora: "41"
+
+    container: fedora:${{ matrix.build.fedora }}
 
     steps:
       - name: Checkout repository
@@ -23,46 +25,37 @@ jobs:
       - name: Install build dependencies
         run: |
           dnf clean all && dnf makecache
-          dnf install -y rpm-build rpmdevtools createrepo_c
-          dnf install -y libv4l-devel pam-devel
-          dnf install -y 'dnf-command(builddep)'
+          dnf install -y rpm-build rpmdevtools createrepo_c libv4l-devel pam-devel 'dnf-command(builddep)'
 
       - name: Set up RPM build environment
-        run: |
-          rpmdev-setuptree
+        run: rpmdev-setuptree
 
-      - name: Download Fedora's Busybox Source RPM
+      - name: Download Busybox SRPM
         run: |
           dnf download --source busybox
           rpm -ivh busybox-*.src.rpm
 
-      - name: Apply patches to spec file (if any)
+      - name: Apply SPEC patches
         run: |
           cd ~/rpmbuild/SPECS
           if compgen -G "$GITHUB_WORKSPACE/patches/SPECS/*.patch" > /dev/null; then
             cp $GITHUB_WORKSPACE/patches/SPECS/*.patch .
-            for patch in *.patch; do
-              patch -p1 -i "$patch"
-            done
+            for patch in *.patch; do patch -p1 -i "$patch"; done
           fi
 
-      - name: Apply patches to source files (if any)
+      - name: Apply SOURCE patches
         run: |
           cd ~/rpmbuild/SOURCES
           if compgen -G "$GITHUB_WORKSPACE/patches/SOURCES/*.patch" > /dev/null; then
             cp $GITHUB_WORKSPACE/patches/SOURCES/*.patch .
-            for patch in $GITHUB_WORKSPACE/patches/SOURCES/*.patch; do
-              patch -p1 -i "$patch"
-            done
+            for patch in $GITHUB_WORKSPACE/patches/SOURCES/*.patch; do patch -p1 -i "$patch"; done
           fi
 
       - name: Install Build Dependencies
-        run: |
-          dnf builddep -y ~/rpmbuild/SPECS/busybox.spec
+        run: dnf builddep -y ~/rpmbuild/SPECS/busybox.spec
 
       - name: Build the RPM
-        run: |
-          rpmbuild -ba ~/rpmbuild/SPECS/busybox.spec
+        run: rpmbuild -ba ~/rpmbuild/SPECS/busybox.spec
 
       - name: Prepare RPM Repository
         run: |
@@ -70,16 +63,15 @@ jobs:
           find ~/rpmbuild/RPMS -type f -name "*.rpm" -exec cp {} repo/ \;
           createrepo_c repo/
 
-      - name: Upload RPMs as Artifact
+      - name: Upload versioned RPMs
         uses: actions/upload-artifact@v4
         with:
-          name: busybox
+          name: busybox-${{ matrix.build.version }}
           path: repo/
 
   deploy:
-    needs: build-rpm
     runs-on: ubuntu-latest
-    if: always()
+    needs: build-rpm
     permissions:
       pages: write
       id-token: write
@@ -91,22 +83,27 @@ jobs:
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
-      - name: Download Built RPMs
+      - name: Download 7.2 Artifact
         uses: actions/download-artifact@v4
         with:
-          name: busybox
-          path: temp-repo/
+          name: busybox-7.2
+          path: temp/7.2/x86_64/
 
-      - name: Move RPMs to Versioned Subdirectory
+      - name: Download 7.0 Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: busybox-7.0
+          path: temp/7.0/x86_64/
+
+      - name: Assemble final structure
         run: |
-          mkdir -p publish/7.2/x86_64
-          cp -r temp-repo/* publish/7.2/x86_64/
+          mkdir -p publish
+          cp -r temp/* publish/
 
-      - name: Upload to GitHub Pages
+      - name: Upload Pages Artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: publish/
-
 
       - name: Deploy to GitHub Pages
         uses: actions/deploy-pages@v4
