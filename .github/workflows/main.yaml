@@ -42,7 +42,7 @@ jobs:
           if compgen -G "$GITHUB_WORKSPACE/patches/SPECS/*.patch" > /dev/null; then
             cp $GITHUB_WORKSPACE/patches/SPECS/*.patch .
             for patch in *.patch; do
-              patch -p1 < "$patch"
+              patch -p1 -i "$patch"
             done
           fi
 
