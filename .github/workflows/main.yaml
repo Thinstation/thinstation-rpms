@@ -41,6 +41,7 @@ jobs:
           cd ~/rpmbuild/SPECS
           if compgen -G "$GITHUB_WORKSPACE/patches/SPECS/*.patch" > /dev/null; then
             cp $GITHUB_WORKSPACE/patches/SPECS/*.patch .
+            ls -al
             for patch in *.patch; do
               patch -p1 -i "$patch"
             done
