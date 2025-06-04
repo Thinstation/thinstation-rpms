@@ -51,7 +51,7 @@ jobs:
           cd ~/rpmbuild/SOURCES
           if compgen -G "$GITHUB_WORKSPACE/patches/SOURCES/*.patch" > /dev/null; then
             cp $GITHUB_WORKSPACE/patches/SOURCES/*.patch .
-            for patch in *.patch; do
+            for patch in $GITHUB_WORKSPACE/patches/SOURCES/*.patch; do
               patch -p1 -i "$patch"
             done
           fi
