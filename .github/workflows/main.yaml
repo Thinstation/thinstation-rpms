@@ -1,4 +1,4 @@
-name: Build & Deploy Busybox RPMs
+name: Build & Deploy RPMs
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-rpm:
+  build-busybox:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -43,16 +43,20 @@ jobs:
         run: |
           cd ~/rpmbuild/SPECS
           if compgen -G "$GITHUB_WORKSPACE/patches/SPECS/*.patch" > /dev/null; then
-            cp $GITHUB_WORKSPACE/patches/SPECS/*.patch .
-            for patch in *.patch; do patch -p1 -i "$patch"; done
+            cp "$GITHUB_WORKSPACE"/patches/SPECS/*.patch .
+            for patch in *.patch; do
+              patch -p1 -i "$patch"
+            done
           fi
 
       - name: Apply SOURCE patches
         run: |
           cd ~/rpmbuild/SOURCES
           if compgen -G "$GITHUB_WORKSPACE/patches/SOURCES/*.patch" > /dev/null; then
-            cp $GITHUB_WORKSPACE/patches/SOURCES/*.patch .
-            for patch in $GITHUB_WORKSPACE/patches/SOURCES/*.patch; do patch -p1 -i "$patch"; done
+            cp "$GITHUB_WORKSPACE"/patches/SOURCES/*.patch .
+            for patch in "$GITHUB_WORKSPACE"/patches/SOURCES/*.patch; do
+              patch -p1 -i "$patch"
+            done
           fi
 
       - name: Install Build Dependencies
@@ -73,9 +77,70 @@ jobs:
           name: busybox-${{ matrix.build.version }}
           path: repo/
 
+  build-gnome-themes-extra:
+    runs-on: ubuntu-latest
+    container: fedora:44
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          dnf clean all && dnf makecache
+          dnf install -y rpm-build rpmdevtools createrepo_c 'dnf-command(builddep)'
+
+      - name: Set up RPM build environment
+        run: rpmdev-setuptree
+
+      - name: Download gnome-themes-extra SRPM
+        run: |
+          dnf download --source gnome-themes-extra
+          rpm -ivh gnome-themes-extra-*.src.rpm
+
+      - name: Apply extra SPEC patches
+        run: |
+          cd ~/rpmbuild/SPECS
+          if compgen -G "$GITHUB_WORKSPACE/patches-extra/SPECS/*.patch" > /dev/null; then
+            cp "$GITHUB_WORKSPACE"/patches-extra/SPECS/*.patch .
+            for patch in *.patch; do
+              patch -p1 -i "$patch"
+            done
+          fi
+
+      - name: Apply extra SOURCE patches
+        run: |
+          cd ~/rpmbuild/SOURCES
+          if compgen -G "$GITHUB_WORKSPACE/patches-extra/SOURCES/*.patch" > /dev/null; then
+            cp "$GITHUB_WORKSPACE"/patches-extra/SOURCES/*.patch .
+            for patch in "$GITHUB_WORKSPACE"/patches-extra/SOURCES/*.patch; do
+              patch -p1 -i "$patch"
+            done
+          fi
+
+      - name: Install Build Dependencies
+        run: dnf builddep -y ~/rpmbuild/SPECS/gnome-themes-extra.spec
+
+      - name: Build the RPM
+        run: rpmbuild -ba ~/rpmbuild/SPECS/gnome-themes-extra.spec
+
+      - name: Prepare extra RPM Repository
+        run: |
+          mkdir -p repo
+          find ~/rpmbuild/RPMS -type f -name "*.rpm" -exec cp {} repo/ \;
+          createrepo_c repo/
+
+      - name: Upload 7.4 extra RPMs
+        uses: actions/upload-artifact@v4
+        with:
+          name: extra-7.4
+          path: repo/
+
   deploy:
     runs-on: ubuntu-latest
-    needs: build-rpm
+    needs:
+      - build-rpm
+      - build-extra-7_4
     permissions:
       pages: write
       id-token: write
@@ -87,10 +152,16 @@ jobs:
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
-      - name: Download 7.4 Artifact
+      - name: Download 7.4 Busybox Artifact
         uses: actions/download-artifact@v4
         with:
           name: busybox-7.4
+          path: temp/7.4/x86_64/
+
+      - name: Download 7.4 Extra Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: extra-7.4
           path: temp/7.4/x86_64/
 
       - name: Download 7.3 Artifact
@@ -98,7 +169,7 @@ jobs:
         with:
           name: busybox-7.3
           path: temp/7.3/x86_64/
-          
+
       - name: Download 7.2 Artifact
         uses: actions/download-artifact@v4
         with:
@@ -110,6 +181,11 @@ jobs:
         with:
           name: busybox-7.0
           path: temp/7.0/x86_64/
+
+      - name: Rebuild metadata for 7.4 after merge
+        run: |
+          rm -rf temp/7.4/x86_64/repodata
+          createrepo_c temp/7.4/x86_64/
 
       - name: Assemble final structure
         run: |
