@@ -133,14 +133,14 @@ jobs:
       - name: Upload 7.4 extra RPMs
         uses: actions/upload-artifact@v4
         with:
-          name: extra-7.4
+          name: gnome-themes-extra-7.4
           path: repo/
 
   deploy:
     runs-on: ubuntu-latest
     needs:
-      - build-rpm
-      - build-extra-7_4
+      - build-busybox
+      - build-gnome-themes-extra
     permissions:
       pages: write
       id-token: write
@@ -161,7 +161,7 @@ jobs:
       - name: Download 7.4 Extra Artifact
         uses: actions/download-artifact@v4
         with:
-          name: extra-7.4
+          name: gnome-themes-extra-7.4
           path: temp/7.4/x86_64/
 
       - name: Download 7.3 Artifact
