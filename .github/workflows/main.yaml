@@ -138,6 +138,7 @@ jobs:
 
   deploy:
     runs-on: ubuntu-latest
+    container: fedora:44
     needs:
       - build-busybox
       - build-gnome-themes-extra
@@ -149,6 +150,11 @@ jobs:
       name: github-pages
 
     steps:
+      - name: Install build dependencies
+        run: |
+          dnf clean all && dnf makecache
+          dnf install -y rpm-build rpmdevtools createrepo_c 'dnf-command(builddep)'
+          
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
