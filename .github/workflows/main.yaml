@@ -11,6 +11,10 @@ jobs:
     strategy:
       matrix:
         build:
+          - version: "7.4"
+            fedora: "44"
+          - version: "7.3"
+            fedora: "43"
           - version: "7.2"
             fedora: "42"
           - version: "7.0"
@@ -83,6 +87,18 @@ jobs:
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
+      - name: Download 7.4 Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: busybox-7.4
+          path: temp/7.4/x86_64/
+
+      - name: Download 7.3 Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: busybox-7.3
+          path: temp/7.3/x86_64/
+          
       - name: Download 7.2 Artifact
         uses: actions/download-artifact@v4
         with:
