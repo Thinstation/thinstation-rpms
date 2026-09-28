@@ -2,39 +2,63 @@ name: Build & Deploy RPMs
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - "feature/**"
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
   build-busybox:
-    runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         build:
           - version: "7.4"
             fedora: "44"
+            arch: x86_64
+            runner: ubuntu-24.04
+          - version: "7.4"
+            fedora: "44"
+            arch: aarch64
+            runner: ubuntu-24.04-arm
           - version: "7.3"
             fedora: "43"
+            arch: x86_64
+            runner: ubuntu-24.04
           - version: "7.2"
             fedora: "42"
+            arch: x86_64
+            runner: ubuntu-24.04
           - version: "7.0"
             fedora: "41"
+            arch: x86_64
+            runner: ubuntu-24.04
 
+    runs-on: ${{ matrix.build.runner }}
     container: fedora:${{ matrix.build.fedora }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Verify native architecture
+        run: |
+          echo "Runner architecture: $(uname -m)"
+          test "$(uname -m)" = "${{ matrix.build.arch }}"
+
       - name: Install build dependencies
         run: |
-          dnf clean all && dnf makecache
-          dnf install -y rpm-build rpmdevtools createrepo_c libv4l-devel pam-devel 'dnf-command(builddep)'
+          dnf clean all
+          dnf makecache
+          dnf install -y rpm-build rpmdevtools libv4l-devel pam-devel 'dnf-command(builddep)'
 
       - name: Set up RPM build environment
         run: rpmdev-setuptree
 
-      - name: Download Busybox SRPM
+      - name: Download BusyBox SRPM
         run: |
           dnf download --source busybox
           rpm -ivh busybox-*.src.rpm
@@ -59,26 +83,79 @@ jobs:
             done
           fi
 
-      - name: Install Build Dependencies
+      - name: Install BusyBox build dependencies
         run: dnf builddep -y ~/rpmbuild/SPECS/busybox.spec
 
-      - name: Build the RPM
+      - name: Build BusyBox RPMs
         run: rpmbuild -ba ~/rpmbuild/SPECS/busybox.spec
 
-      - name: Prepare RPM Repository
+      - name: Collect BusyBox RPMs
         run: |
           mkdir -p repo
           find ~/rpmbuild/RPMS -type f -name "*.rpm" -exec cp {} repo/ \;
-          createrepo_c repo/
 
-      - name: Upload versioned RPMs
+      - name: Upload BusyBox RPMs
         uses: actions/upload-artifact@v4
         with:
-          name: busybox-${{ matrix.build.version }}
-          path: repo/
+          name: repo-${{ matrix.build.version }}-${{ matrix.build.arch }}-busybox
+          path: repo/*.rpm
+
+  build-gtkdialog:
+    strategy:
+      fail-fast: false
+      matrix:
+        build:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+
+    runs-on: ${{ matrix.build.runner }}
+    container: fedora:44
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify native architecture
+        run: |
+          echo "Runner architecture: $(uname -m)"
+          test "$(uname -m)" = "${{ matrix.build.arch }}"
+
+      - name: Install RPM build tooling
+        run: |
+          dnf clean all
+          dnf makecache
+          dnf install -y rpm-build rpmdevtools 'dnf-command(builddep)'
+
+      - name: Set up RPM build environment
+        run: rpmdev-setuptree
+
+      - name: Prepare gtkdialog spec
+        run: cp specs/gtkdialog.spec ~/rpmbuild/SPECS/
+
+      - name: Install gtkdialog build dependencies
+        run: dnf builddep -y ~/rpmbuild/SPECS/gtkdialog.spec
+
+      - name: Download gtkdialog source
+        run: spectool -g -R ~/rpmbuild/SPECS/gtkdialog.spec
+
+      - name: Build gtkdialog RPM
+        run: rpmbuild -ba ~/rpmbuild/SPECS/gtkdialog.spec
+
+      - name: Collect gtkdialog RPM
+        run: |
+          mkdir -p repo
+          find ~/rpmbuild/RPMS -type f -name "gtkdialog-*.rpm" -exec cp {} repo/ \;
+
+      - name: Upload gtkdialog RPM
+        uses: actions/upload-artifact@v4
+        with:
+          name: repo-7.4-${{ matrix.build.arch }}-gtkdialog
+          path: repo/*.rpm
 
   build-gnome-themes-extra:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     container: fedora:43
 
     steps:
@@ -87,8 +164,9 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          dnf clean all && dnf makecache
-          dnf install -y rpm-build rpmdevtools createrepo_c 'dnf-command(builddep)'
+          dnf clean all
+          dnf makecache
+          dnf install -y rpm-build rpmdevtools 'dnf-command(builddep)'
 
       - name: Set up RPM build environment
         run: rpmdev-setuptree
@@ -124,24 +202,26 @@ jobs:
       - name: Build the RPM
         run: rpmbuild -ba ~/rpmbuild/SPECS/gnome-themes-extra.spec
 
-      - name: Prepare extra RPM Repository
+      - name: Collect gnome-themes-extra RPMs
         run: |
           mkdir -p repo
           find ~/rpmbuild/RPMS -type f -name "*.rpm" -exec cp {} repo/ \;
-          createrepo_c repo/
 
-      - name: Upload 7.4 extra RPMs
+      - name: Upload gnome-themes-extra RPMs
         uses: actions/upload-artifact@v4
         with:
-          name: gnome-themes-extra-7.4
-          path: repo/
+          name: repo-7.4-x86_64-gnome-themes-extra
+          path: repo/*.rpm
 
   deploy:
-    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
     container: fedora:44
     needs:
       - build-busybox
+      - build-gtkdialog
       - build-gnome-themes-extra
+
     permissions:
       pages: write
       id-token: write
@@ -150,48 +230,56 @@ jobs:
       name: github-pages
 
     steps:
-      - name: Install build dependencies
+      - name: Install repository tools
         run: |
-          dnf clean all && dnf makecache
-          dnf install -y rpm-build rpmdevtools createrepo_c 'dnf-command(builddep)'
-          
+          dnf clean all
+          dnf makecache
+          dnf install -y createrepo_c
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
-      - name: Download 7.4 Busybox Artifact
+      - name: Download 7.4 x86_64 RPMs
         uses: actions/download-artifact@v4
         with:
-          name: busybox-7.4
+          pattern: repo-7.4-x86_64-*
+          merge-multiple: true
           path: temp/7.4/x86_64/
 
-      - name: Download 7.4 Extra Artifact
+      - name: Download 7.4 aarch64 RPMs
         uses: actions/download-artifact@v4
         with:
-          name: gnome-themes-extra-7.4
-          path: temp/7.4/x86_64/
+          pattern: repo-7.4-aarch64-*
+          merge-multiple: true
+          path: temp/7.4/aarch64/
 
-      - name: Download 7.3 Artifact
+      - name: Download 7.3 x86_64 RPMs
         uses: actions/download-artifact@v4
         with:
-          name: busybox-7.3
+          pattern: repo-7.3-x86_64-*
+          merge-multiple: true
           path: temp/7.3/x86_64/
 
-      - name: Download 7.2 Artifact
+      - name: Download 7.2 x86_64 RPMs
         uses: actions/download-artifact@v4
         with:
-          name: busybox-7.2
+          pattern: repo-7.2-x86_64-*
+          merge-multiple: true
           path: temp/7.2/x86_64/
 
-      - name: Download 7.0 Artifact
+      - name: Download 7.0 x86_64 RPMs
         uses: actions/download-artifact@v4
         with:
-          name: busybox-7.0
+          pattern: repo-7.0-x86_64-*
+          merge-multiple: true
           path: temp/7.0/x86_64/
 
-      - name: Rebuild metadata for 7.4 after merge
+      - name: Build repository metadata
         run: |
-          rm -rf temp/7.4/x86_64/repodata
-          createrepo_c temp/7.4/x86_64/
+          for repo in             temp/7.4/x86_64             temp/7.4/aarch64             temp/7.3/x86_64             temp/7.2/x86_64             temp/7.0/x86_64
+          do
+            createrepo_c "$repo"
+          done
 
       - name: Assemble final structure
         run: |
