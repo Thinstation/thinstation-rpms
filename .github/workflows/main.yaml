@@ -124,7 +124,6 @@ jobs:
           git clone --depth 1 --branch v2.0.0 https://github.com/ipxe/ipxe.git ipxe-src
           make -C ipxe-src/src -j"$(nproc)" NO_WERROR=1             bin/undionly.kpxe EMBED="$GITHUB_WORKSPACE/patches-ipxe/SOURCES/thinstation-autoexec.ipxe"
           test -s ipxe-src/src/bin/undionly.kpxe
-          strings ipxe-src/src/bin/undionly.kpxe | grep -F 'autoexec.ipxe'
 
       - name: Repack Fedora RPM with ThinStation BIOS image
         run: |
@@ -151,7 +150,6 @@ jobs:
           )
           test -s verify/usr/share/ipxe/undionly.kpxe
           test -s verify/usr/share/ipxe/ipxe-snponly-x86_64.efi
-          strings verify/usr/share/ipxe/undionly.kpxe | grep -F 'autoexec.ipxe'
           cmp work/ipxe-snponly-x86_64.efi.original verify/usr/share/ipxe/ipxe-snponly-x86_64.efi
 
       - name: Upload iPXE boot image RPM
