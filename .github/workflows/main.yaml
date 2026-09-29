@@ -177,7 +177,6 @@ jobs:
           %files
           /usr/share/ipxe/undionly.kpxe
           /usr/share/ipxe/ipxe-snponly-x86_64.efi
-          /usr/share/licenses/ipxe-bootimgs-x86/
 
           %changelog
           * Mon Sep 28 2026 ThinStation Project <build@thinstation.org> - $VERSION-999.thinstation
