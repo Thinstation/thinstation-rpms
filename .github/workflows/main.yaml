@@ -112,7 +112,7 @@ jobs:
         run: |
           dnf clean all
           dnf makecache
-          dnf install -y rpm-build rpmdevtools rpmrebuild cpio git gcc make perl-interpreter perl-Getopt-Long perl-FindBin perl-lib xz-devel syslinux
+          dnf install -y rpm-build rpmdevtools cpio git gcc make perl-interpreter perl-Getopt-Long perl-FindBin perl-lib xz-devel syslinux
 
       - name: Download Fedora 45 iPXE boot image RPM
         run: |
@@ -127,15 +127,62 @@ jobs:
 
       - name: Repack Fedora RPM with ThinStation BIOS image
         run: |
-          mkdir -p repo original
+          mkdir -p original repo
           (
             cd original
             rpm2cpio ../fedora-rpm/ipxe-bootimgs-x86-*.rpm | cpio -idm --quiet
           )
+
           cp -a original/usr/share/ipxe/ipxe-snponly-x86_64.efi ipxe-snponly-x86_64.efi.original
+          cp -a ipxe-src/src/bin/undionly.kpxe original/usr/share/ipxe/undionly.kpxe
 
-          rpmrebuild             --batch             --package             --notest-install             --directory "$GITHUB_WORKSPACE/repo"             --change-files="cp '$GITHUB_WORKSPACE/ipxe-src/src/bin/undionly.kpxe' ./usr/share/ipxe/undionly.kpxe"             --change-spec-preamble='sed -e "s/^Release:.*/Release:        999.thinstation%{?dist}/"'             fedora-rpm/ipxe-bootimgs-x86-*.rpm
+          FEDORA_RPM="$(echo fedora-rpm/ipxe-bootimgs-x86-*.rpm)"
+          VERSION="$(rpm -qp --qf '%{VERSION}' "$FEDORA_RPM")"
+          EPOCH="$(rpm -qp --qf '%{EPOCHNUM}' "$FEDORA_RPM")"
+          LICENSE="$(rpm -qp --qf '%{LICENSE}' "$FEDORA_RPM")"
 
+          tar -C original -czf ~/rpmbuild/SOURCES/ipxe-bootimgs-x86-payload.tar.gz .
+
+          cat > ~/rpmbuild/SPECS/ipxe-bootimgs-x86.spec <<EOF
+          Name:           ipxe-bootimgs-x86
+          Epoch:          $EPOCH
+          Version:        $VERSION
+          Release:        999.thinstation%{?dist}
+          Summary:        X86 Network boot loader images for ThinStation
+          License:        $LICENSE
+          URL:            https://ipxe.org/
+          Source0:        ipxe-bootimgs-x86-payload.tar.gz
+          BuildArch:      noarch
+          Provides:       ipxe-bootimgs = %{version}-%{release}
+          Obsoletes:      ipxe-bootimgs < %{version}-%{release}
+
+          %description
+          Fedora iPXE x86 boot image package with the BIOS undionly.kpxe
+          replaced by a ThinStation build embedding only "chain autoexec.ipxe".
+          The UEFI payload is retained byte-for-byte from Fedora.
+
+          %prep
+          mkdir payload
+          tar -xzf %{SOURCE0} -C payload
+
+          %build
+
+          %install
+          mkdir -p %{buildroot}
+          cp -a payload/. %{buildroot}/
+
+          %files
+          /usr/share/ipxe/undionly.kpxe
+          /usr/share/ipxe/ipxe-snponly-x86_64.efi
+          /usr/share/licenses/ipxe-bootimgs-x86/
+
+          %changelog
+          * Mon Sep 28 2026 ThinStation Project <build@thinstation.org> - $VERSION-999.thinstation
+          - Preserve Fedora UEFI image and replace only BIOS loader
+          EOF
+
+          rpmbuild -bb ~/rpmbuild/SPECS/ipxe-bootimgs-x86.spec
+          find ~/rpmbuild/RPMS -type f -name 'ipxe-bootimgs-x86-*.rpm' -exec cp {} repo/ \;
           test -n "$(find repo -maxdepth 1 -name 'ipxe-bootimgs-x86-*.rpm' -print -quit)"
 
       - name: Verify only BIOS payload changed
