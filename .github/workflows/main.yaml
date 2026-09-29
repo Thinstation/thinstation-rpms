@@ -114,6 +114,9 @@ jobs:
           dnf makecache
           dnf install -y rpm-build rpmdevtools cpio git gcc make perl-interpreter perl-Getopt-Long perl-FindBin perl-lib xz-devel syslinux
 
+      - name: Set up RPM build environment
+        run: rpmdev-setuptree
+
       - name: Download Fedora 45 iPXE boot image RPM
         run: |
           mkdir -p fedora-rpm
