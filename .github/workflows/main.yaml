@@ -108,38 +108,41 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install RPM build tooling
+      - name: Install tools
         run: |
           dnf clean all
           dnf makecache
-          dnf install -y rpm-build rpmdevtools 'dnf-command(builddep)'
+          dnf install -y rpm-build rpmdevtools rpmrebuild cpio git gcc make perl-interpreter perl-Getopt-Long perl-FindBin perl-lib xz-devel syslinux
 
-      - name: Set up RPM build environment
-        run: rpmdev-setuptree
-
-      - name: Download Fedora 45 iPXE SRPM
+      - name: Download Fedora 45 iPXE boot image RPM
         run: |
-          dnf download --source ipxe
-          rpm -ivh ipxe-*.src.rpm
+          mkdir -p fedora-rpm
+          dnf download --destdir fedora-rpm ipxe-bootimgs-x86
 
-      - name: Add ThinStation BIOS bootstrap
+      - name: Build ThinStation BIOS iPXE
         run: |
-          cp patches-ipxe/SOURCES/thinstation-autoexec.ipxe ~/rpmbuild/SOURCES/
-          cd ~/rpmbuild/SPECS
-          patch -p0 -i "$GITHUB_WORKSPACE/patches-ipxe/SPECS/0001-thinstation-ipxe-autoexec-bootstrap.patch"
+          git clone --depth 1 --branch v2.0.0 https://github.com/ipxe/ipxe.git ipxe-src
+          make -C ipxe-src/src -j"$(nproc)" NO_WERROR=1             bin/undionly.kpxe EMBED="$GITHUB_WORKSPACE/patches-ipxe/SOURCES/thinstation-autoexec.ipxe"
+          test -s ipxe-src/src/bin/undionly.kpxe
+          strings ipxe-src/src/bin/undionly.kpxe | grep -F 'autoexec.ipxe'
 
-      - name: Install iPXE build dependencies
-        run: dnf builddep -y ~/rpmbuild/SPECS/ipxe.spec
-
-      - name: Build iPXE boot images
-        run: rpmbuild -ba ~/rpmbuild/SPECS/ipxe.spec
-
-      - name: Collect iPXE boot image RPM
+      - name: Repack Fedora RPM with ThinStation BIOS image
         run: |
+          mkdir -p work/root
+          rpm2cpio fedora-rpm/ipxe-bootimgs-x86-*.rpm | (cd work/root && cpio -idm --quiet)
+          cp -a work/root/usr/share/ipxe/ipxe-snponly-x86_64.efi work/ipxe-snponly-x86_64.efi.original
+          cp -a ipxe-src/src/bin/undionly.kpxe work/root/usr/share/ipxe/undionly.kpxe
+
+          rpmrebuild             --package             --notest-install             --change-spec-whole='sed -e "s/^Release:.*/Release:        1.thinstation%{?dist}/"'             fedora-rpm/ipxe-bootimgs-x86-*.rpm
+
           mkdir -p repo
-          find ~/rpmbuild/RPMS -type f -name 'ipxe-bootimgs-x86-*.rpm' -exec cp {} repo/ \;
+          find ~/rpmbuild/RPMS -type f -name 'ipxe-bootimgs-x86-*.rpm' -exec cp {} repo/ ; || true
+          if ! compgen -G 'repo/ipxe-bootimgs-x86-*.rpm' >/dev/null; then
+            find /root/rpmbuild/RPMS /root -type f -name 'ipxe-bootimgs-x86-*.rpm' -exec cp {} repo/ ; 2>/dev/null || true
+          fi
+          test -n "$(find repo -maxdepth 1 -name 'ipxe-bootimgs-x86-*.rpm' -print -quit)"
 
-      - name: Verify boot images
+      - name: Verify only BIOS payload changed
         run: |
           mkdir -p verify
           (
@@ -149,10 +152,7 @@ jobs:
           test -s verify/usr/share/ipxe/undionly.kpxe
           test -s verify/usr/share/ipxe/ipxe-snponly-x86_64.efi
           strings verify/usr/share/ipxe/undionly.kpxe | grep -F 'autoexec.ipxe'
-          if strings verify/usr/share/ipxe/ipxe-snponly-x86_64.efi | grep -Fq 'chain autoexec.ipxe'; then
-            echo 'UEFI image was unexpectedly modified with the BIOS bootstrap' >&2
-            exit 1
-          fi
+          cmp work/ipxe-snponly-x86_64.efi.original verify/usr/share/ipxe/ipxe-snponly-x86_64.efi
 
       - name: Upload iPXE boot image RPM
         uses: actions/upload-artifact@v4
