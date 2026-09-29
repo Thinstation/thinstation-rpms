@@ -127,18 +127,15 @@ jobs:
 
       - name: Repack Fedora RPM with ThinStation BIOS image
         run: |
-          mkdir -p work/root
-          rpm2cpio fedora-rpm/ipxe-bootimgs-x86-*.rpm | (cd work/root && cpio -idm --quiet)
-          cp -a work/root/usr/share/ipxe/ipxe-snponly-x86_64.efi work/ipxe-snponly-x86_64.efi.original
-          cp -a ipxe-src/src/bin/undionly.kpxe work/root/usr/share/ipxe/undionly.kpxe
+          mkdir -p repo original
+          (
+            cd original
+            rpm2cpio ../fedora-rpm/ipxe-bootimgs-x86-*.rpm | cpio -idm --quiet
+          )
+          cp -a original/usr/share/ipxe/ipxe-snponly-x86_64.efi ipxe-snponly-x86_64.efi.original
 
-          rpmrebuild             --package             --notest-install             --change-spec-whole='sed -e "s/^Release:.*/Release:        1.thinstation%{?dist}/"'             fedora-rpm/ipxe-bootimgs-x86-*.rpm
+          rpmrebuild             --batch             --package             --notest-install             --directory "$GITHUB_WORKSPACE/repo"             --change-files="cp '$GITHUB_WORKSPACE/ipxe-src/src/bin/undionly.kpxe' ./usr/share/ipxe/undionly.kpxe"             --change-spec-preamble='sed -e "s/^Release:.*/Release:        999.thinstation%{?dist}/"'             fedora-rpm/ipxe-bootimgs-x86-*.rpm
 
-          mkdir -p repo
-          find ~/rpmbuild/RPMS -type f -name 'ipxe-bootimgs-x86-*.rpm' -exec cp {} repo/ ; || true
-          if ! compgen -G 'repo/ipxe-bootimgs-x86-*.rpm' >/dev/null; then
-            find /root/rpmbuild/RPMS /root -type f -name 'ipxe-bootimgs-x86-*.rpm' -exec cp {} repo/ ; 2>/dev/null || true
-          fi
           test -n "$(find repo -maxdepth 1 -name 'ipxe-bootimgs-x86-*.rpm' -print -quit)"
 
       - name: Verify only BIOS payload changed
@@ -150,7 +147,7 @@ jobs:
           )
           test -s verify/usr/share/ipxe/undionly.kpxe
           test -s verify/usr/share/ipxe/ipxe-snponly-x86_64.efi
-          cmp work/ipxe-snponly-x86_64.efi.original verify/usr/share/ipxe/ipxe-snponly-x86_64.efi
+          cmp ipxe-snponly-x86_64.efi.original verify/usr/share/ipxe/ipxe-snponly-x86_64.efi
 
       - name: Upload iPXE boot image RPM
         uses: actions/upload-artifact@v4
