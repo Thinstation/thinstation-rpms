@@ -100,6 +100,66 @@ jobs:
           name: repo-${{ matrix.build.version }}-${{ matrix.build.arch }}-busybox
           path: repo/*.rpm
 
+  build-ipxe:
+    runs-on: ubuntu-24.04
+    container: fedora:45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install RPM build tooling
+        run: |
+          dnf clean all
+          dnf makecache
+          dnf install -y rpm-build rpmdevtools 'dnf-command(builddep)'
+
+      - name: Set up RPM build environment
+        run: rpmdev-setuptree
+
+      - name: Download Fedora 45 iPXE SRPM
+        run: |
+          dnf download --source ipxe
+          rpm -ivh ipxe-*.src.rpm
+
+      - name: Add ThinStation BIOS bootstrap
+        run: |
+          cp patches-ipxe/SOURCES/thinstation-autoexec.ipxe ~/rpmbuild/SOURCES/
+          cd ~/rpmbuild/SPECS
+          patch -p0 -i "$GITHUB_WORKSPACE/patches-ipxe/SPECS/0001-thinstation-ipxe-autoexec-bootstrap.patch"
+
+      - name: Install iPXE build dependencies
+        run: dnf builddep -y ~/rpmbuild/SPECS/ipxe.spec
+
+      - name: Build iPXE boot images
+        run: rpmbuild -ba ~/rpmbuild/SPECS/ipxe.spec
+
+      - name: Collect iPXE boot image RPM
+        run: |
+          mkdir -p repo
+          find ~/rpmbuild/RPMS -type f -name 'ipxe-bootimgs-x86-*.rpm' -exec cp {} repo/ \;
+
+      - name: Verify boot images
+        run: |
+          mkdir -p verify
+          (
+            cd verify
+            rpm2cpio ../repo/ipxe-bootimgs-x86-*.rpm | cpio -idm --quiet
+          )
+          test -s verify/usr/share/ipxe/undionly.kpxe
+          test -s verify/usr/share/ipxe/ipxe-snponly-x86_64.efi
+          strings verify/usr/share/ipxe/undionly.kpxe | grep -F 'autoexec.ipxe'
+          if strings verify/usr/share/ipxe/ipxe-snponly-x86_64.efi | grep -Fq 'chain autoexec.ipxe'; then
+            echo 'UEFI image was unexpectedly modified with the BIOS bootstrap' >&2
+            exit 1
+          fi
+
+      - name: Upload iPXE boot image RPM
+        uses: actions/upload-artifact@v4
+        with:
+          name: repo-7.4-x86_64-ipxe
+          path: repo/*.rpm
+
   build-gtkdialog:
     strategy:
       fail-fast: false
@@ -219,6 +279,7 @@ jobs:
     container: fedora:44
     needs:
       - build-busybox
+      - build-ipxe
       - build-gtkdialog
       - build-gnome-themes-extra
 
