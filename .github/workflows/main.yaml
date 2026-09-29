@@ -160,6 +160,56 @@ jobs:
           name: repo-7.4-x86_64-ipxe
           path: repo/*.rpm
 
+  build-ipxe-secureboot:
+    runs-on: ubuntu-24.04
+    container: fedora:45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install RPM build tooling
+        run: |
+          dnf clean all
+          dnf makecache
+          dnf install -y rpm-build rpmdevtools curl tar
+
+      - name: Set up RPM build environment
+        run: rpmdev-setuptree
+
+      - name: Download official signed iPXE release bundle
+        run: |
+          curl -fL https://github.com/ipxe/ipxe/releases/latest/download/ipxeboot.tar.gz             -o ~/rpmbuild/SOURCES/ipxe-secureboot-x86.tar.gz
+
+      - name: Prepare spec
+        run: cp specs/ipxe-secureboot-x86.spec ~/rpmbuild/SPECS/
+
+      - name: Build Secure Boot RPM
+        run: rpmbuild -ba ~/rpmbuild/SPECS/ipxe-secureboot-x86.spec
+
+      - name: Collect Secure Boot RPM
+        run: |
+          mkdir -p repo
+          find ~/rpmbuild/RPMS -type f -name 'ipxe-secureboot-x86-*.rpm' -exec cp {} repo/ \;
+
+      - name: Verify signed payload layout
+        run: |
+          mkdir -p verify
+          (
+            cd verify
+            rpm2cpio ../repo/ipxe-secureboot-x86-*.rpm | cpio -idm --quiet
+          )
+          test -s verify/usr/share/ipxe/secureboot/shimx64.efi
+          test -s verify/usr/share/ipxe/secureboot/snponly.efi
+          test -L verify/usr/share/ipxe/secureboot/snponly-shim.efi
+          test "$(readlink verify/usr/share/ipxe/secureboot/snponly-shim.efi)" = shimx64.efi
+
+      - name: Upload Secure Boot RPM
+        uses: actions/upload-artifact@v4
+        with:
+          name: repo-7.4-x86_64-ipxe-secureboot
+          path: repo/*.rpm
+
   build-gtkdialog:
     strategy:
       fail-fast: false
@@ -280,6 +330,7 @@ jobs:
     needs:
       - build-busybox
       - build-ipxe
+      - build-ipxe-secureboot
       - build-gtkdialog
       - build-gnome-themes-extra
 
