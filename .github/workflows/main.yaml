@@ -309,6 +309,72 @@ jobs:
           name: repo-7.4-${{ matrix.build.arch }}-gtkdialog
           path: repo/*.rpm
 
+  build-pam-hooks:
+    strategy:
+      fail-fast: false
+      matrix:
+        build:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+
+    runs-on: ${{ matrix.build.runner }}
+    container: fedora:44
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify native architecture
+        run: |
+          echo "Runner architecture: $(uname -m)"
+          test "$(uname -m)" = "${{ matrix.build.arch }}"
+
+      - name: Install RPM build tooling
+        run: |
+          dnf clean all
+          dnf makecache
+          dnf install -y rpm-build rpmdevtools pam-devel gcc binutils cpio
+
+      - name: Set up RPM build environment
+        run: rpmdev-setuptree
+
+      - name: Prepare PAM hooks sources
+        run: |
+          cp specs/thinstation-pam-hooks.spec ~/rpmbuild/SPECS/
+          cp sources/pam_hooks.c ~/rpmbuild/SOURCES/
+
+      - name: Build PAM hooks RPM
+        run: rpmbuild -ba ~/rpmbuild/SPECS/thinstation-pam-hooks.spec
+
+      - name: Collect PAM hooks RPM
+        run: |
+          mkdir -p repo
+          find ~/rpmbuild/RPMS -type f -name 'thinstation-pam-hooks-*.rpm' -exec cp {} repo/ \;
+
+      - name: Verify PAM module
+        run: |
+          rm -rf verify
+          mkdir verify
+          (
+            cd verify
+            rpm2cpio ../repo/thinstation-pam-hooks-*.rpm | cpio -idm --quiet
+          )
+          test -s verify/usr/lib64/security/pam_hooks.so
+          for symbol in \
+            pam_sm_authenticate pam_sm_setcred pam_sm_acct_mgmt \
+            pam_sm_chauthtok pam_sm_open_session pam_sm_close_session
+          do
+            nm -D verify/usr/lib64/security/pam_hooks.so | grep -q " T $symbol$"
+          done
+
+      - name: Upload PAM hooks RPM
+        uses: actions/upload-artifact@v4
+        with:
+          name: repo-7.4-${{ matrix.build.arch }}-pam-hooks
+          path: repo/*.rpm
+
   build-gnome-themes-extra:
     runs-on: ubuntu-24.04
     container: fedora:43
@@ -377,6 +443,7 @@ jobs:
       - build-ipxe
       - build-ipxe-secureboot
       - build-gtkdialog
+      - build-pam-hooks
       - build-gnome-themes-extra
 
     permissions:
