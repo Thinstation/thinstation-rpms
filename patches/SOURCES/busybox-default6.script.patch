@@ -1,0 +1,127 @@
+--- /dev/null
++++ b/busybox-default6.script
+@@ -0,0 +1,124 @@
++#!/bin/sh
++# ThinStation DHCPv6 host-lease hook. Use udhcpc6 -s for site-specific policy.
++# IPv4 addresses, SLAAC addresses and RA default routes are never flushed.
++# No client is started automatically by installing this file.
++set -eu
++set -f
++export LC_ALL=C
++umask 077
++state_base=/run/udhcpc6
++fail() { echo "udhcpc6: $*" >&2; exit 1; }
++case "${1:-}" in bound|renew|deconfig|nak|leasefail) event=$1;; *) exit 0;; esac
++case "${interface:-}" in ''|.|..|-*|*[!A-Za-z0-9_.:-]*) fail 'invalid or missing interface';; esac
++[ "${#interface}" -le 15 ] || fail 'interface name is too long'
++case "${ipv6:-}" in '') ;; *[!0-9A-Fa-f:]*) fail 'invalid lease address';; esac
++if [ -n "${ipv6:-}" ]; then
++    case "$ipv6" in *:*) ;; *) fail 'lease address is not IPv6';; esac
++    case "${lease:-}" in ''|*[!0-9]*) fail 'invalid lease lifetime';; esac
++    [ "${#lease}" -le 10 ] && [ "$lease" -le 4294967295 ] || fail 'invalid lease lifetime'
++fi
++for value in ${dns:-}; do
++    case "$value" in *[!0-9A-Fa-f:.]*|''|-*) fail 'invalid DNS address';; esac
++    case "$value" in *:*) ;; *) fail 'DHCPv6 DNS address is not IPv6';; esac
++done
++for value in ${search:-}; do
++    case "$value" in ''|-*|.*|*[!A-Za-z0-9_.-]*) fail 'invalid search domain';; esac
++done
++mkdir -p "$state_base/$interface"
++state=$state_base/$interface
++# Only serialize this client's lease events. A lock is not held by the daemon.
++exec 9>"$state/lock"
++flock -x 9
++old_address=''
++[ ! -f "$state/address" ] || read -r old_address < "$state/address" || :
++remove_address() {
++    if [ -n "$old_address" ]; then
++        # The address may already have expired. Never flush the whole interface.
++        ip -6 addr del "$old_address/128" dev "$interface" 2>/dev/null || :
++        rm -f "$state/address"
++    fi
++}
++# resolvectl manages both address families on one link. Preserve other providers'
++# current entries and record only additions owned by this DHCPv6 client.
++# Never overwrite resolv.conf or run 'resolvectl revert', which would erase IPv4.
++# Compare compressed/expanded IPv6 DNS strings without depending on Python.
++token_key() {
++    printf '%s\n' "$1" | awk '
++    index($0, ":") {
++        count=split(tolower($0), halves, "::")
++        left=halves[1]=="" ? 0 : split(halves[1], a, ":")
++        right=(count==2 && halves[2]!="") ? split(halves[2], b, ":") : 0
++        out=""
++        for (i=1; i<=8; i++) {
++            value=i<=left ? a[i] : (i>8-right ? b[i-(8-right)] : "0")
++            sub(/^0+/, "", value); if (value=="") value="0"
++            out=out (i==1 ? "" : ":") value
++        }
++        print out; next
++    }
++    { print tolower($0) }'
++}
++contains_token() {
++    wanted=$(token_key "$1")
++    for candidate in $2; do
++        [ "$(token_key "$candidate")" != "$wanted" ] || return 0
++    done
++    return 1
++}
++resolver_update() {
++    kind=$1; incoming=$2
++    previous=''
++    [ ! -f "$state/$kind" ] || previous=$(cat "$state/$kind")
++    [ -n "$incoming$previous" ] || return 0
++    if ! command -v resolvectl >/dev/null 2>&1; then
++        echo "udhcpc6: $kind options not applied: resolvectl unavailable; use a site-specific -s hook" >&2
++        return 0
++    fi
++    current=$(resolvectl "$kind" "$interface") || return 1
++    current=${current#*:}
++    retained=''; owned=''
++    for value in $current; do
++        if ! contains_token "$value" "$previous"; then retained="$retained $value"; fi
++    done
++    for value in $incoming; do
++        if ! contains_token "$value" "$retained"; then retained="$retained $value"; owned="$owned $value"; fi
++    done
++    if [ -n "$retained" ]; then
++        # Intentional word splitting of validated token lists.
++        resolvectl "$kind" "$interface" $retained
++    else
++        resolvectl "$kind" "$interface" ''
++    fi
++    printf '%s\n' "$owned" > "$state/$kind"
++}
++case "$event" in
++    deconfig|nak)
++        remove_address
++        resolver_update dns ''
++        resolver_update domain ''
++        ;;
++    bound|renew)
++        if [ -n "${ipv6:-}" ]; then
++            if [ "$lease" -eq 0 ]; then
++                remove_address
++            else
++                if [ "$old_address" = "$ipv6" ]; then
++                    operation=replace
++                else
++                    operation=add
++                fi
++                # udhcpc6 exports the valid lifetime as lease; no prefix length
++                # is supplied for IA_NA. Routing continues to come from RA.
++                ip -6 addr "$operation" "$ipv6/128" dev "$interface" valid_lft "$lease" preferred_lft "$lease"
++                if [ -n "$old_address" ] && [ "$old_address" != "$ipv6" ]; then remove_address; fi
++                printf '%s\n' "$ipv6" > "$state/address"
++            fi
++        fi
++        resolver_update dns "${dns:-}"
++        resolver_update domain "${search:-}"
++        if [ -n "${ipv6prefix:-}" ]; then
++            echo 'udhcpc6: delegated prefix requires a site-specific -s hook; host hook does not configure downstream networks' >&2
++        fi
++        ;;
++    leasefail) : ;; # The client calls deconfig separately on lease expiry.
++esac

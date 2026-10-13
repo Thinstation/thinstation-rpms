@@ -1,0 +1,81 @@
+--- /dev/null
++++ b/busybox-default6-tests.py
+@@ -0,0 +1,78 @@
++"""Isolated lease-event tests; never call host networking or resolver tools."""
++import json, os, pathlib, subprocess, sys, tempfile, unittest
++SOURCE=pathlib.Path(sys.argv.pop(1))
++STUB=r"""import json, os, pathlib, sys
++root=pathlib.Path(os.environ['FIXTURE'])
++name=pathlib.Path(sys.argv[0]).name
++args=sys.argv[1:]
++with (root/'calls').open('a') as f: f.write(json.dumps([name]+args)+'\n')
++if name=='resolvectl':
++    path=root/args[0]
++    if len(args)==2: print('Link 7 (ens18): '+path.read_text())
++    else: path.write_text(' '.join(args[2:]))
++"""
++class LeaseTests(unittest.TestCase):
++    def setUp(self):
++        self.tmp=tempfile.TemporaryDirectory()
++        self.addCleanup(self.tmp.cleanup)
++        self.root=pathlib.Path(self.tmp.name)
++        self.bin=self.root/'bin'; self.bin.mkdir()
++        for name in ('ip','resolvectl'):
++            p=self.bin/name; p.write_text('#!'+sys.executable+'\n'+STUB); p.chmod(0o755)
++        for name,value in [('dns','192.0.2.53'),('domain','ipv4.example'),('calls','')]: (self.root/name).write_text(value)
++        self.script=self.root/'hook'
++        self.script.write_text(SOURCE.read_text().replace('state_base=/run/udhcpc6','state_base='+str(self.root/'state')))
++        self.env=dict(os.environ,PATH=str(self.bin)+':'+os.environ['PATH'],FIXTURE=str(self.root),interface='ens18')
++        for key in ('ipv6','lease','dns','search','ipv6prefix'): self.env.pop(key,None)
++    def run_hook(self,event,**values):
++        return subprocess.run(['sh',str(self.script),event],env=dict(self.env,**values),text=True,capture_output=True,timeout=10)
++    def calls(self): return [json.loads(x) for x in (self.root/'calls').read_text().splitlines()]
++    def test_initial_deconfig_preserves_existing_network(self):
++        p=self.run_hook('deconfig'); self.assertEqual(p.returncode,0,p.stderr); self.assertEqual(self.calls(),[])
++    def test_bind_renew_remove_only_owned_address_and_dns(self):
++        values=dict(ipv6='2001:db8::20',lease='600',dns='2001:db8::53',search='v6.example')
++        for event in ('bound','renew'):
++            p=self.run_hook(event,**values); self.assertEqual(p.returncode,0,p.stderr)
++        self.assertEqual((self.root/'dns').read_text(),'192.0.2.53 2001:db8::53')
++        self.assertEqual((self.root/'domain').read_text(),'ipv4.example v6.example')
++        p=self.run_hook('deconfig'); self.assertEqual(p.returncode,0,p.stderr)
++        self.assertEqual((self.root/'dns').read_text(),'192.0.2.53')
++        self.assertEqual((self.root/'domain').read_text(),'ipv4.example')
++        ips=[x for x in self.calls() if x[0]=='ip']
++        self.assertEqual([x[3] for x in ips],['add','replace','del'])
++        self.assertTrue(all('flush' not in x and 'route' not in x for x in ips))
++    def test_stateless_information_does_not_touch_addresses(self):
++        p=self.run_hook('bound',dns='2001:db8::53',search='v6.example')
++        self.assertEqual(p.returncode,0,p.stderr); self.assertFalse(any(x[0]=='ip' for x in self.calls()))
++    def test_preexisting_ipv6_dns_is_not_owned_or_removed(self):
++        (self.root/'dns').write_text('192.0.2.53 2001:db8::53')
++        self.assertEqual(self.run_hook('bound',dns='2001:db8::53').returncode,0)
++        self.assertEqual(self.run_hook('deconfig').returncode,0)
++        self.assertEqual((self.root/'dns').read_text(),'192.0.2.53 2001:db8::53')
++    def test_bad_interface_is_rejected_before_any_command(self):
++        for value in ('../escape','-all','a'*16,''):
++            with self.subTest(value=value): self.assertNotEqual(self.run_hook('bound',interface=value).returncode,0)
++        self.assertEqual(self.calls(),[])
++    def test_untrusted_values_are_not_executed(self):
++        for values in [dict(ipv6='$(id)',lease='6'),dict(ipv6='2001:db8::1',lease='-1'),dict(dns='--help'),dict(search='x;id')]:
++            with self.subTest(values=values): self.assertNotEqual(self.run_hook('bound',**values).returncode,0)
++        self.assertEqual(self.calls(),[])
++    def test_ipv4_client_settings_not_touched(self):
++        self.assertNotIn('ifconfig',SOURCE.read_text()); self.assertNotIn('ip -4',SOURCE.read_text())
++    def test_prefix_not_applied_to_host(self):
++        p=self.run_hook('bound',ipv6prefix='2001:db8:1::/56')
++        self.assertEqual(p.returncode,0,p.stderr); self.assertIn('site-specific',p.stderr); self.assertFalse(any(x[0]=='ip' for x in self.calls()))
++    def test_compressed_dns_response_removes_expanded_owned_address(self):
++        p=self.run_hook('bound',dns='2001:0db8:0000:0000:0000:0000:0000:0053')
++        self.assertEqual(p.returncode,0,p.stderr)
++        (self.root/'dns').write_text('192.0.2.53 2001:db8::53')
++        self.assertEqual(self.run_hook('deconfig').returncode,0)
++        self.assertEqual((self.root/'dns').read_text(),'192.0.2.53')
++    def test_external_dns_added_after_bind_is_preserved(self):
++        self.assertEqual(self.run_hook('bound',dns='2001:db8::53').returncode,0)
++        (self.root/'dns').write_text('192.0.2.53 2001:db8::53 2001:db8::54')
++        self.assertEqual(self.run_hook('deconfig').returncode,0)
++        self.assertEqual((self.root/'dns').read_text(),'192.0.2.53 2001:db8::54')
++    def test_leasefail_is_noop(self):
++        self.assertEqual(self.run_hook('leasefail').returncode,0); self.assertEqual(self.calls(),[])
++if __name__=='__main__': unittest.main()
